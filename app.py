@@ -6,11 +6,12 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 import torch
+from youtube_pipeline import full_pipeline, search_sentences
 
 
 logging.basicConfig(level=logging.INFO)
 
-MODEL_NAME = os.getenv("MODEL_NAME", "google/embeddinggemma-300m")
+MODEL_NAME = os.getenv("MODEL_NAME", "paraphrase-multilingual-MiniLM-L12-v2")
 HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN")
 DEVICE_SETTING = os.getenv("DEVICE", "auto")
 
@@ -18,7 +19,7 @@ model: SentenceTransformer | None = None
 loaded_model_name: str | None = None
 loaded_device: str | None = None
 
-app = FastAPI(title="Gemma Embedding Service", version="1.0.0")
+app = FastAPI(title="Dozu Embedding Service", version="1.0.0")
 
 
 class TextIn(BaseModel):
@@ -38,6 +39,30 @@ class SimilarityOut(BaseModel):
     scores: list[float]
     best_index: int | None
     best_score: float | None
+
+
+class YouTubePipelineRequest(BaseModel):
+    video_id: str
+    languages: list[str] | None = None
+    refine: bool = False
+    max_gap: float = 1.5
+    min_length: int = 5
+    top_k: int | None = None
+    query: str | None = None
+
+
+class YouTubeSentence(BaseModel):
+    start: float
+    end: float
+    text: str
+    embedding: list[float]
+
+
+class YouTubePipelineResponse(BaseModel):
+    video_id: str
+    sentence_count: int
+    sentences: list[YouTubeSentence]
+    query_results: list[dict] | None = None
 
 
 def _resolve_device() -> str:
@@ -63,7 +88,7 @@ def _resolve_device() -> str:
 
 @app.on_event("startup")
 def load_model():
-    global model, loaded_model_name
+    global model, loaded_model_name, loaded_device
     primary = MODEL_NAME
     device = _resolve_device()
     loaded_device = device
@@ -144,3 +169,51 @@ def health_check():
         "device_requested": DEVICE_SETTING,
         "requires_token": MODEL_NAME == "google/embeddinggemma-300m",
     }
+
+
+def _embed_batch(texts: list[str]):
+    ensure_model()
+    # Using model.encode for batch with normalization for cosine similarity
+    return model.encode(
+        texts, normalize_embeddings=True, convert_to_numpy=True, show_progress_bar=False
+    )
+
+
+def _embed_single(text: str):
+    ensure_model()
+    return model.encode(
+        text, normalize_embeddings=True, convert_to_numpy=True, show_progress_bar=False
+    ).tolist()
+
+
+@app.post("/youtube/segments", response_model=YouTubePipelineResponse)
+def youtube_segments(req: YouTubePipelineRequest):
+    """Fetch YouTube transcript, merge into sentences, embed, optionally search."""
+    ensure_model()
+    try:
+        result = full_pipeline(
+            video_id=req.video_id,
+            embed_batch=_embed_batch,
+            embed_single=_embed_single,
+            languages=req.languages,
+            max_gap=req.max_gap,
+            min_length=req.min_length,
+            refine=req.refine,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    sentences = [YouTubeSentence(**s) for s in result["sentences"]]
+    query_results = None
+    if req.query:
+        # Perform search over sentences
+        query_results = search_sentences(
+            req.query, result["sentences"], _embed_single, top_k=req.top_k or 5
+        )
+
+    return YouTubePipelineResponse(
+        video_id=result["video_id"],
+        sentence_count=result["sentence_count"],
+        sentences=sentences,
+        query_results=query_results,
+    )
