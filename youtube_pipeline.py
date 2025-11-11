@@ -252,8 +252,10 @@ def embed_sentences(
     Assumes embed_batch returns a numpy array or list of lists already normalized.
     """
     texts = [s["text"] for s in sentences]
+
     vectors = embed_batch(texts)
     # Convert to list of floats per sentence (handle numpy array)
+
     try:
         vectors_list = vectors.tolist()  # type: ignore[attr-defined]
     except AttributeError:

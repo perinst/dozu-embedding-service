@@ -6,7 +6,12 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 import torch
-from youtube_pipeline import full_pipeline, search_sentences, segment_fit_sentence
+from youtube_pipeline import (
+    embed_sentences,
+    full_pipeline,
+    search_sentences,
+    segment_fit_sentence,
+)
 
 
 logging.basicConfig(level=logging.INFO)
@@ -72,6 +77,14 @@ class YouTubeSegmentSentenceCalSimilarityRequest(BaseModel):
     query: str | None = None
 
 
+class ListTextForEmbeddingRequest(BaseModel):
+    segments: List[Dict[str, Any]]
+
+
+class SingleTextEmbeddingRequest(BaseModel):
+    query: str
+
+
 class YouTubeSentence(BaseModel):
     start: float
     text: str
@@ -135,55 +148,6 @@ def load_model():
 def ensure_model():
     if model is None:
         raise HTTPException(status_code=503, detail="Model not loaded yet")
-
-
-def _encode(text: str):
-    # Normalize so cosine similarity works directly
-    emb = model.encode(
-        text,
-        normalize_embeddings=True,
-        convert_to_numpy=True,
-        show_progress_bar=False,
-    )
-    return emb.tolist()
-
-
-def _batch_encode(texts: list[str]):
-    embs = model.encode(
-        texts,
-        normalize_embeddings=True,
-        convert_to_numpy=True,
-        show_progress_bar=False,
-    )
-    return embs
-
-
-@app.post("/embed/query", response_model=EmbeddingOut)
-def embed_query(item: TextIn):
-    ensure_model()
-    return EmbeddingOut(embedding=_encode(item.text))
-
-
-@app.post("/embed/document", response_model=EmbeddingOut)
-def embed_document(item: TextIn):
-    ensure_model()
-    return EmbeddingOut(embedding=_encode(item.text))
-
-
-@app.post("/similarity", response_model=SimilarityOut)
-def similarity(payload: SimilarityIn):
-    ensure_model()
-    if not payload.documents:
-        raise HTTPException(status_code=400, detail="documents list is empty")
-    # Batch encode: first is query, rest are documents
-    embs = _batch_encode([payload.query] + payload.documents)
-    query_vec = embs[0]
-    doc_vecs = embs[1:]
-    # Since normalized, cosine = dot
-    scores = (doc_vecs @ query_vec).tolist()
-    best_idx = int(np.argmax(scores)) if scores else None
-    best_score = scores[best_idx] if best_idx is not None else None
-    return SimilarityOut(scores=scores, best_index=best_idx, best_score=best_score)
 
 
 @app.get("/health")
@@ -269,8 +233,8 @@ def embedding_youtube_segments(req: YouTubeSegmentSentenceCalSimilarityRequest):
     sentences = [YouTubeSentence(**s) for s in result["sentences"]]
 
     return {
-        "sentence_count": result["sentence_count"],
-        "sentences": sentences,
+        "count": result["sentence_count"],
+        "embeddings": sentences,
     }
 
 
@@ -308,3 +272,35 @@ def youtube_segments(req: YouTubeSegmentSentenceCalSimilarityRequest):
         "sentence_count": result["sentence_count"],
         "query_results": query_results,
     }
+
+
+@app.post(
+    "/single/text/embedding",
+    response_model=Dict,
+)
+def embedding_single(req: SingleTextEmbeddingRequest):
+    try:
+        query = req.query
+
+        embedding = _embed_single(query)
+
+        return {"embedding": embedding}
+
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post(
+    "/segments/embedding",
+    response_model=Dict,
+)
+def embedding_segments(req: ListTextForEmbeddingRequest):
+    try:
+        listToEmbed = req.segments
+
+        embeddings = embed_sentences(listToEmbed, _embed_batch)
+
+        return embeddings
+
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
