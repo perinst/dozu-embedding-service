@@ -16,6 +16,8 @@ Design notes:
 
 from __future__ import annotations
 from typing import List, Callable, Optional, Sequence, Dict, Any
+import re
+import numpy as np
 
 try:
     from youtube_transcript_api import YouTubeTranscriptApi
@@ -31,8 +33,31 @@ except ImportError:
     _NLP = None
 
 
+def extract_video_id(video_or_url: str) -> str:
+    """Extract a YouTube video ID from a URL or return the input if it already looks like an ID."""
+    s = video_or_url.strip()
+    m = re.search(r"youtu\.be/([\w-]{11})", s)
+    if m:
+        return m.group(1)
+    m = re.search(r"v=([\w-]{11})", s)
+    if m:
+        return m.group(1)
+    m = re.search(r"/embed/([\w-]{11})", s)
+    if m:
+        return m.group(1)
+    if re.fullmatch(r"[\w-]{11}", s):
+        return s
+    m = re.search(r"([\w-]{11})(?:\?.*)?$", s)
+    if m:
+        return m.group(1)
+    return s
+
+
 def get_transcript_segments(
-    video_id: str, languages: Optional[List[str]] = None
+    video_id_or_url: str,
+    languages: Optional[List[str]] = None,
+    proxy: Optional[Dict[str, Any]] = None,
+    preserve_formatting: bool = False,
 ) -> List[Dict[str, Any]]:
     """Fetch transcript segments for a YouTube video.
 
@@ -43,28 +68,79 @@ def get_transcript_segments(
         raise RuntimeError(
             "youtube-transcript-api not installed. Please add it to requirements and install."
         )
+
     langs = languages or ["en"]
+    video_id = extract_video_id(video_id_or_url)
+
+    # Configure proxy if provided
+    api_kwargs: Dict[str, Any] = {}
+    if proxy:
+        try:
+            from youtube_transcript_api.proxies import WebshareProxyConfig, GenericProxyConfig  # type: ignore
+
+            kind = (proxy.get("kind") or "").lower()
+            if kind == "webshare":
+                api_kwargs["proxy_config"] = WebshareProxyConfig(
+                    proxy_username=proxy.get("proxy_username"),
+                    proxy_password=proxy.get("proxy_password"),
+                    filter_ip_locations=proxy.get("filter_ip_locations"),
+                )
+            elif kind == "generic":
+                api_kwargs["proxy_config"] = GenericProxyConfig(
+                    http_url=proxy.get("http_url"),
+                    https_url=proxy.get("https_url"),
+                )
+        except Exception:
+            api_kwargs = {}
+
     try:
-        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=langs)
-    except Exception as e:  # pragma: no cover
+        api = YouTubeTranscriptApi(**api_kwargs)
+        fetched = api.fetch(
+            video_id, languages=langs, preserve_formatting=preserve_formatting
+        )
+        if hasattr(fetched, "to_raw_data"):
+            return fetched.to_raw_data()  # list of dicts
+        # If no to_raw_data, try to iterate and build dicts
+        return [
+            {
+                "text": getattr(snippet, "text", ""),
+                "start": float(getattr(snippet, "start", 0.0)),
+                "duration": float(getattr(snippet, "duration", 0.0)),
+            }
+            for snippet in fetched
+        ]
+    except Exception as e:
         raise RuntimeError(f"Failed to fetch transcript: {e}")
-    return transcript
 
 
 def clean_segments(segments: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Remove empty text entries and normalize whitespace."""
     cleaned = []
     for seg in segments:
-        text = (seg.get("text") or "").strip()
-        if not text:
-            continue
-        cleaned.append(
-            {
-                "text": text,
-                "start": float(seg.get("start", 0.0)),
-                "duration": float(seg.get("duration", 0.0)),
-            }
-        )
+
+        if isinstance(seg, dict):
+            text = (seg.get("text") or "").strip()
+            if not text:
+                continue
+            cleaned.append(
+                {
+                    "text": text,
+                    "start": float(seg.get("startSecond", 0.0)),
+                }
+            )
+        else:
+
+            text = getattr(seg, "text", "").strip()
+            if not text:
+                continue
+            start = float(getattr(seg, "startSecond", 0.0))
+
+            cleaned.append(
+                {
+                    "text": text,
+                    "start": start,
+                }
+            )
     return cleaned
 
 
@@ -85,23 +161,22 @@ def merge_segments(
     current_text: List[str] = []
     current_start = float(segs[0]["start"])
 
-    def flush(end_time: float):
+    def flush():
         if not current_text:
             return
         merged.append(
             {
                 "start": current_start,
-                "end": end_time,
                 "startMs": int(round(current_start * 1000)),
-                "endMs": int(round(end_time * 1000)),
                 "text": " ".join(current_text).strip(),
             }
         )
 
     for i, seg in enumerate(segs):
         text = seg["text"].strip()
+
         start_time = float(seg["start"])
-        end_time = start_time + float(seg.get("duration", 0.0))
+
         if not current_text:
             current_start = start_time
         current_text.append(text)
@@ -114,23 +189,28 @@ def merge_segments(
             gap = 0.0
 
         sentence_so_far = " ".join(current_text)
+
         word_count = len(sentence_so_far.split())
+
         is_terminal_punct = text.endswith((".", "?", "!"))
+
         should_break = False
+
         if is_terminal_punct and word_count >= min_length:
             should_break = True
+
         if gap > max_gap:
             should_break = True
 
         if should_break:
-            flush(end_time)
+
+            flush()
+
             current_text = []
 
     # Flush any remainder using last segment end
     if current_text:
-        last_seg = segs[-1]
-        last_end = float(last_seg["start"]) + float(last_seg.get("duration", 0.0))
-        flush(last_end)
+        flush()
 
     return merged
 
@@ -200,7 +280,7 @@ def search_sentences(
     q_vec = embed_query(query)
     try:
         # q_vec could be list; convert
-        import numpy as np  # local import
+        # local import
 
         q_arr = np.array(q_vec, dtype=float)
         sent_arr = np.array(
@@ -216,15 +296,38 @@ def search_sentences(
                     "index": int(idx),
                     "score": float(scores[idx]),
                     "start": s["start"],
-                    "end": s["end"],
                     "startMs": s.get("startMs"),
-                    "endMs": s.get("endMs"),
                     "text": s["text"],
                 }
             )
         return results
     except Exception as e:  # pragma: no cover
         raise RuntimeError(f"Similarity computation failed: {e}")
+
+
+def segment_fit_sentence(
+    raw: List[Dict[str, Any]],
+    embed_batch: Callable[[List[str]], Any],
+    embed_single: Callable[[str], Any],
+    languages: Optional[List[str]] = None,
+    max_gap: float = 1.5,
+    min_length: int = 5,
+    refine: bool = False,
+) -> Dict[str, Any]:
+
+    cleaned = clean_segments(raw)
+
+    merged = merge_segments(cleaned, max_gap=max_gap, min_length=min_length)
+
+    if refine:
+        merged = refine_sentences(merged)
+
+    sentences_with_embeddings = embed_sentences(merged, embed_batch)
+
+    return {
+        "sentence_count": len(sentences_with_embeddings),
+        "sentences": sentences_with_embeddings,
+    }
 
 
 def full_pipeline(
@@ -235,6 +338,8 @@ def full_pipeline(
     max_gap: float = 1.5,
     min_length: int = 5,
     refine: bool = False,
+    proxy: Optional[Dict[str, Any]] = None,
+    preserve_formatting: bool = False,
 ) -> Dict[str, Any]:
     """Execute end-to-end pipeline and return structured result.
 
@@ -243,7 +348,12 @@ def full_pipeline(
     - sentences: list of {start, end, text, embedding}
     Metadata: counts etc.
     """
-    raw = get_transcript_segments(video_id, languages=languages)
+    raw = get_transcript_segments(
+        video_id,
+        languages=languages,
+        proxy=proxy,
+        preserve_formatting=preserve_formatting,
+    )
     cleaned = clean_segments(raw)
     merged = merge_segments(cleaned, max_gap=max_gap, min_length=min_length)
     if refine:
@@ -257,6 +367,7 @@ def full_pipeline(
 
 
 __all__ = [
+    "extract_video_id",
     "get_transcript_segments",
     "clean_segments",
     "merge_segments",
@@ -264,4 +375,5 @@ __all__ = [
     "embed_sentences",
     "search_sentences",
     "full_pipeline",
+    "segment_fit_sentence",
 ]

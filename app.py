@@ -1,12 +1,12 @@
 import os
 import numpy as np
 import logging
-from typing import List
+from typing import Any, Dict, List
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 import torch
-from youtube_pipeline import full_pipeline, search_sentences
+from youtube_pipeline import full_pipeline, search_sentences, segment_fit_sentence
 
 
 logging.basicConfig(level=logging.INFO)
@@ -41,8 +41,29 @@ class SimilarityOut(BaseModel):
     best_score: float | None
 
 
+class ProxyConfig(BaseModel):
+    kind: str | None = None  # 'webshare' or 'generic'
+    proxy_username: str | None = None
+    proxy_password: str | None = None
+    filter_ip_locations: list[str] | None = None
+    http_url: str | None = None
+    https_url: str | None = None
+
+
 class YouTubePipelineRequest(BaseModel):
-    video_id: str
+    video_id: str  # can be full URL; will be parsed
+    languages: list[str] | None = None
+    refine: bool = False
+    max_gap: float = 1.5
+    min_length: int = 5
+    top_k: int | None = None
+    query: str | None = None
+    preserve_formatting: bool = False
+    proxy: ProxyConfig | None = None
+
+
+class YouTubeSegmentSentenceCalSimilarityRequest(BaseModel):
+    segments: List[Dict[str, Any]]
     languages: list[str] | None = None
     refine: bool = False
     max_gap: float = 1.5
@@ -53,13 +74,18 @@ class YouTubePipelineRequest(BaseModel):
 
 class YouTubeSentence(BaseModel):
     start: float
-    end: float
     text: str
     embedding: list[float]
 
 
 class YouTubePipelineResponse(BaseModel):
     video_id: str
+    sentence_count: int
+    sentences: list[YouTubeSentence]
+    query_results: list[dict] | None = None
+
+
+class YouTubePipelineSentenceCalSimilarityResponse(BaseModel):
     sentence_count: int
     sentences: list[YouTubeSentence]
     query_results: list[dict] | None = None
@@ -191,6 +217,7 @@ def youtube_segments(req: YouTubePipelineRequest):
     """Fetch YouTube transcript, merge into sentences, embed, optionally search."""
     ensure_model()
     try:
+        proxy_dict = req.proxy.dict() if req.proxy else None
         result = full_pipeline(
             video_id=req.video_id,
             embed_batch=_embed_batch,
@@ -199,6 +226,8 @@ def youtube_segments(req: YouTubePipelineRequest):
             max_gap=req.max_gap,
             min_length=req.min_length,
             refine=req.refine,
+            proxy=proxy_dict,
+            preserve_formatting=req.preserve_formatting,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -217,3 +246,65 @@ def youtube_segments(req: YouTubePipelineRequest):
         sentences=sentences,
         query_results=query_results,
     )
+
+
+@app.post("/youtube/segments/embedding", response_model=Dict)
+def embedding_youtube_segments(req: YouTubeSegmentSentenceCalSimilarityRequest):
+    ensure_model()
+
+    try:
+        result = segment_fit_sentence(
+            raw=req.segments,
+            embed_batch=_embed_batch,
+            embed_single=_embed_single,
+            languages=req.languages,
+            max_gap=req.max_gap,
+            min_length=req.min_length,
+            refine=req.refine,
+        )
+
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    sentences = [YouTubeSentence(**s) for s in result["sentences"]]
+
+    return {
+        "sentence_count": result["sentence_count"],
+        "sentences": sentences,
+    }
+
+
+@app.post(
+    "/youtube/segments/similarity",
+    response_model=Dict,
+)
+def youtube_segments(req: YouTubeSegmentSentenceCalSimilarityRequest):
+    ensure_model()
+
+    try:
+        result = segment_fit_sentence(
+            raw=req.segments,
+            embed_batch=_embed_batch,
+            embed_single=_embed_single,
+            languages=req.languages,
+            max_gap=req.max_gap,
+            min_length=req.min_length,
+            refine=req.refine,
+        )
+
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    sentences = [YouTubeSentence(**s) for s in result["sentences"]]
+
+    query_results = None
+
+    if req.query:
+        query_results = search_sentences(
+            req.query, result["sentences"], _embed_single, top_k=req.top_k or 5
+        )
+
+    return {
+        "sentence_count": result["sentence_count"],
+        "query_results": query_results,
+    }
