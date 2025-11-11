@@ -312,7 +312,7 @@ def segment_fit_sentence(
     embed_batch: Callable[[List[str]], Any],
     embed_single: Callable[[str], Any],
     languages: Optional[List[str]] = None,
-    max_gap: float = 1.5,
+    max_gap: float = 2.5,
     min_length: int = 5,
     refine: bool = False,
 ) -> Dict[str, Any]:
@@ -337,7 +337,7 @@ def full_pipeline(
     embed_batch: Callable[[List[str]], Any],
     embed_single: Callable[[str], Any],
     languages: Optional[List[str]] = None,
-    max_gap: float = 1.5,
+    max_gap: float = 2.5,
     min_length: int = 5,
     refine: bool = False,
     proxy: Optional[Dict[str, Any]] = None,
