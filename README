@@ -58,7 +58,7 @@ Environment variables:
 
 Port:
 
-- The app listens on port `3535` by default (see Dockerfile and run examples below).
+- The app listens on port `8686` by default (see Dockerfile and run examples below).
 
 ## Getting started
 
@@ -79,11 +79,11 @@ Optional but recommended: create a virtual environment.
 
 3.  Start the API
 
-        	uvicorn app:app --host 0.0.0.0 --port 3535 --reload
+        	uvicorn app:app --host 0.0.0.0 --port 8686 --reload
 
 4.  Check health
 
-        	curl http://localhost:3535/health
+        	curl http://localhost:8686/health
 
 ### 2) Run with Docker
 
@@ -95,18 +95,18 @@ Build the image and run the container. You can pass model/device via env vars.
 
 2.  Run
 
-        	docker run --rm -p 3535:3535 ^
+        	docker run --rm -p 8686:8686 ^
         		-e MODEL_NAME=paraphrase-multilingual-MiniLM-L12-v2 ^
         		-e DEVICE=auto ^
         		dozu-embedding-service
 
 3.  Health
 
-        	curl http://localhost:3535/health
+        	curl http://localhost:8686/health
 
 ## API reference
 
-Base URL: `http://localhost:3535`
+Base URL: `http://localhost:8686`
 
 ### GET /health
 
@@ -289,7 +289,7 @@ with open("large_dataset.json", "r", encoding="utf-8") as f:
 		data = json.load(f)
 
 docs = [{"text": d} for d in data["documents"][:100]]  # small batch
-r = requests.post("http://localhost:3535/segments/embedding", json={"segments": docs})
+r = requests.post("http://localhost:8686/segments/embedding", json={"segments": docs})
 r.raise_for_status()
 emb = r.json()  # list of {text, embedding}
 print(len(emb), "embeddings")
