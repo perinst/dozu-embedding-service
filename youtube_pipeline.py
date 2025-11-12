@@ -114,33 +114,64 @@ def get_transcript_segments(
 
 
 def clean_segments(segments: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Remove empty text entries and normalize whitespace."""
-    cleaned = []
-    for seg in segments:
+    """Remove empty text entries and normalize whitespace, while preserving timing.
+    We assume input provides only start times and estimate end times as:
+        end ≈ start + (word_count * ms_per_word) / 1000
+    where ms_per_word defaults to 400ms. Any provided end/duration fields are ignored.
+    Produces normalized dicts with: text, start, startMs, end, endMs.
+    """
+    cleaned: List[Dict[str, Any]] = []
 
+    MS_PER_WORD_DEFAULT = 400.0
+
+    for seg in segments:
         if isinstance(seg, dict):
             text = (seg.get("text") or "").strip()
             if not text:
                 continue
-            cleaned.append(
-                {
-                    "text": text,
-                    "start": float(seg.get("startSecond", 0.0)),
-                }
-            )
-        else:
 
+            # Resolve start (prefer seconds)
+            start_val = seg.get("start")
+            if start_val is None:
+                start_val = seg.get("startSecond")
+            if start_val is None and seg.get("startMs") is not None:
+                start_val = float(seg.get("startMs", 0.0)) / 1000.0
+            start = float(start_val or 0.0)
+
+            # Estimate end time purely from word count and ms-per-word
+            word_count = len(text.split())
+            duration_sec = (word_count * MS_PER_WORD_DEFAULT) / 1000.0
+            end: float = start + float(duration_sec)
+
+            item: Dict[str, Any] = {
+                "text": text,
+                "start": start,
+                "startMs": int(round(start * 1000)),
+            }
+            item["end"] = end
+            item["endMs"] = int(round(end * 1000))
+            cleaned.append(item)
+        else:
+            # Object-like segment
             text = getattr(seg, "text", "").strip()
             if not text:
                 continue
-            start = float(getattr(seg, "startSecond", 0.0))
-
-            cleaned.append(
-                {
-                    "text": text,
-                    "start": start,
-                }
-            )
+            start_val = getattr(seg, "start", None)
+            if start_val is None:
+                start_val = getattr(seg, "startSecond", 0.0)
+            start = float(start_val or 0.0)
+            # Estimate end time from word count and ms-per-word
+            word_count = len(text.split())
+            duration_sec = (word_count * MS_PER_WORD_DEFAULT) / 1000.0
+            end: float = start + float(duration_sec)
+            item: Dict[str, Any] = {
+                "text": text,
+                "start": start,
+                "startMs": int(round(start * 1000)),
+            }
+            item["end"] = end
+            item["endMs"] = int(round(end * 1000))
+            cleaned.append(item)
     return cleaned
 
 
@@ -161,30 +192,45 @@ def merge_segments(
     current_text: List[str] = []
     current_start = float(segs[0]["start"])
 
+    current_end: Optional[float] = float(segs[0].get("end", current_start))
+
     def flush():
         if not current_text:
             return
-        merged.append(
-            {
-                "start": current_start,
-                "startMs": int(round(current_start * 1000)),
-                "text": " ".join(current_text).strip(),
-            }
-        )
+        out: Dict[str, Any] = {
+            "start": current_start,
+            "startMs": int(round(current_start * 1000)),
+            "text": " ".join(current_text).strip(),
+        }
+        if current_end is not None:
+            out["end"] = current_end
+            out["endMs"] = int(round(current_end * 1000))
+        merged.append(out)
 
     for i, seg in enumerate(segs):
         text = seg["text"].strip()
 
         start_time = float(seg["start"])
+        end_time = float(seg.get("end", start_time))
 
         if not current_text:
             current_start = start_time
+            current_end = end_time
         current_text.append(text)
+        # advance current_end to the end of this piece (when available)
+        if end_time is not None:
+            current_end = end_time
 
         # Compute gap to next
         if i + 1 < len(segs):
             next_start = float(segs[i + 1]["start"])
-            gap = next_start - start_time
+            # If we know the end_time of the current piece, compute actual gap
+            # between the end of current and the next start; otherwise fall back
+            # to start-to-start difference.
+            if end_time is not None:
+                gap = next_start - end_time
+            else:
+                gap = next_start - start_time
         else:
             gap = 0.0
 
@@ -203,9 +249,7 @@ def merge_segments(
             should_break = True
 
         if should_break:
-
             flush()
-
             current_text = []
 
     # Flush any remainder using last segment end
