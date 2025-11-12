@@ -131,7 +131,7 @@ def load_model():
     primary = MODEL_NAME
     device = _resolve_device()
     loaded_device = device
-    fallback = "sentence-transformers/all-MiniLM-L6-v2"
+    fallback = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     try:
         logging.info(f"Loading model: {primary}")
         model = SentenceTransformer(primary, token=HF_TOKEN, device=device)
