@@ -5,7 +5,8 @@ from typing import Any, Dict, List
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
-import torch
+
+
 from youtube_pipeline import (
     embed_sentences,
     full_pipeline,
@@ -110,23 +111,6 @@ class YouTubePipelineSentenceCalSimilarityResponse(BaseModel):
 
 
 def _resolve_device() -> str:
-    req = DEVICE_SETTING.lower()
-    if req == "auto":
-        if torch.cuda.is_available():
-            return "cuda"
-        if torch.backends.mps.is_available():
-            return "mps"
-        return "cpu"
-    if req.startswith("cuda"):
-        if torch.cuda.is_available():
-            return req
-        logging.warning("Requested CUDA but not available. Falling back to CPU.")
-        return "cpu"
-    if req == "mps":
-        if torch.backends.mps.is_available():
-            return "mps"
-        logging.warning("Requested MPS but not available. Falling back to CPU.")
-        return "cpu"
     return "cpu"
 
 
