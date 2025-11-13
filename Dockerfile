@@ -14,8 +14,7 @@ COPY requirements.txt .
 
 # Build wheels with pip cache
 RUN --mount=type=cache,target=/root/.cache/pip \
-    PIP_NO_BUILD_ISOLATION=false \
-    pip wheel --no-cache-dir --wheel-dir=/wheels -r requirements.txt
+    pip wheel --no-deps --wheel-dir=/wheels -r requirements.txt
 
 
 # -------------------
@@ -25,20 +24,29 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-# Only git, keep base as clean as possible
+# Install git (minimal runtime deps)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy and install wheels
 COPY --from=builder /wheels /wheels
-
 RUN pip install --no-cache-dir /wheels/* \
-    && rm -rf /wheels \
-    && rm -rf /root/.cache
+    && rm -rf /wheels
 
 
-COPY . .
+COPY *.py ./
 
+
+RUN rm -rf /root/.cache/pip
+
+RUN useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
+
+ENV HF_HOME=/app/.cache/huggingface
+ENV TRANSFORMERS_CACHE=/app/.cache/huggingface
 
 EXPOSE 8686
 
