@@ -5,13 +5,15 @@ from typing import Any, Dict, List
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
-import torch
+
+
 from youtube_pipeline import (
     embed_sentences,
     full_pipeline,
     search_sentences,
     segment_fit_sentence,
 )
+from file_pdf_pipeline import process_pdf_from_url
 
 
 logging.basicConfig(level=logging.INFO)
@@ -85,6 +87,10 @@ class SingleTextEmbeddingRequest(BaseModel):
     query: str
 
 
+class PDFEmbeddingRequest(BaseModel):
+    fileUrl: str
+
+
 class YouTubeSentence(BaseModel):
     start: float
     text: str
@@ -105,23 +111,6 @@ class YouTubePipelineSentenceCalSimilarityResponse(BaseModel):
 
 
 def _resolve_device() -> str:
-    req = DEVICE_SETTING.lower()
-    if req == "auto":
-        if torch.cuda.is_available():
-            return "cuda"
-        if torch.backends.mps.is_available():
-            return "mps"
-        return "cpu"
-    if req.startswith("cuda"):
-        if torch.cuda.is_available():
-            return req
-        logging.warning("Requested CUDA but not available. Falling back to CPU.")
-        return "cpu"
-    if req == "mps":
-        if torch.backends.mps.is_available():
-            return "mps"
-        logging.warning("Requested MPS but not available. Falling back to CPU.")
-        return "cpu"
     return "cpu"
 
 
@@ -131,7 +120,7 @@ def load_model():
     primary = MODEL_NAME
     device = _resolve_device()
     loaded_device = device
-    fallback = "sentence-transformers/all-MiniLM-L6-v2"
+    fallback = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     try:
         logging.info(f"Loading model: {primary}")
         model = SentenceTransformer(primary, token=HF_TOKEN, device=device)
@@ -304,3 +293,45 @@ def embedding_segments(req: ListTextForEmbeddingRequest):
 
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post(
+    "/pdf/page/embedding",
+    response_model=Dict,
+)
+def pdf_page_embedding(req: PDFEmbeddingRequest):
+    """
+    Process PDF from URL and generate embeddings for each page.
+
+    Args:
+        req: Request containing fileUrl
+
+    Returns:
+        Dictionary with embeddings array containing page-by-page embeddings
+    """
+    ensure_model()
+
+    try:
+        # Process PDF using the pipeline
+        result = process_pdf_from_url(req.fileUrl, _embed_batch)
+
+        # Format response to match requirement: { embeddings: [...] }
+        embeddings = [
+            {
+                "pageNumber": page["page_number"],
+                "charCount": page["char_count"],
+                "embedding": page["embedding"],
+            }
+            for page in result["pages"]
+        ]
+
+        return {
+            "embeddings": embeddings,
+            "pageCount": result["page_count"],
+        }
+
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Unexpected error in PDF embedding: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")

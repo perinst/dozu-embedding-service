@@ -1,7 +1,6 @@
 fastapi
 uvicorn
-transformers
 sentence-transformers
-torch
 youtube-transcript-api
-spacy=3.8.8
+PyPDF2
+requests  

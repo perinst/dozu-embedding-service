@@ -1,18 +1,56 @@
-FROM python:3.10-slim
+# ---------------------
+# --- BUILDER STAGE ---
+# ---------------------
+FROM python:3.13-slim AS builder
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+# Install only what's needed for building wheels
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy files
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Build wheels with pip cache
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip wheel --no-deps --wheel-dir=/wheels -r requirements.txt
 
-# Expose port
+
+# -------------------
+# --- FINAL STAGE ---
+# -------------------
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# Install git (minimal runtime deps)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and install wheels
+COPY --from=builder /wheels /wheels
+RUN pip install --no-cache-dir /wheels/* \
+    && rm -rf /wheels
+
+
+COPY *.py ./
+
+
+RUN rm -rf /root/.cache/pip
+
+RUN useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
+
+ENV HF_HOME=/app/.cache/huggingface
+ENV TRANSFORMERS_CACHE=/app/.cache/huggingface
+
 EXPOSE 8686
 
-# Run server
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:8686/health')" || exit 1
+
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8686"]
