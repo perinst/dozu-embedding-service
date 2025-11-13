@@ -5,3 +5,5 @@ sentence-transformers
 torch
 youtube-transcript-api
 spacy
+PyPDF2
+requests

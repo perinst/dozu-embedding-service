@@ -12,6 +12,7 @@ from youtube_pipeline import (
     search_sentences,
     segment_fit_sentence,
 )
+from file_pdf_pipeline import process_pdf_from_url
 
 
 logging.basicConfig(level=logging.INFO)
@@ -83,6 +84,10 @@ class ListTextForEmbeddingRequest(BaseModel):
 
 class SingleTextEmbeddingRequest(BaseModel):
     query: str
+
+
+class PDFEmbeddingRequest(BaseModel):
+    fileUrl: str
 
 
 class YouTubeSentence(BaseModel):
@@ -304,3 +309,45 @@ def embedding_segments(req: ListTextForEmbeddingRequest):
 
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post(
+    "/pdf/page/embedding",
+    response_model=Dict,
+)
+def pdf_page_embedding(req: PDFEmbeddingRequest):
+    """
+    Process PDF from URL and generate embeddings for each page.
+
+    Args:
+        req: Request containing fileUrl
+
+    Returns:
+        Dictionary with embeddings array containing page-by-page embeddings
+    """
+    ensure_model()
+
+    try:
+        # Process PDF using the pipeline
+        result = process_pdf_from_url(req.fileUrl, _embed_batch)
+
+        # Format response to match requirement: { embeddings: [...] }
+        embeddings = [
+            {
+                "pageNumber": page["page_number"],
+                "charCount": page["char_count"],
+                "embedding": page["embedding"],
+            }
+            for page in result["pages"]
+        ]
+
+        return {
+            "embeddings": embeddings,
+            "pageCount": result["page_count"],
+        }
+
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Unexpected error in PDF embedding: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
