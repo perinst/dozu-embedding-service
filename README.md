@@ -220,10 +220,7 @@ docker run --name dozu-embedding-service \
 docker pull dozuu/dozu-embedding-service:latest && \
 docker stop dozu-embedding-service && \
 docker rm dozu-embedding-service && \
-docker run --name dozu-embedding-service \
-  --network dozu-app-network \
-  -p 8686:8686 \
-  -d dozuu/dozu-embedding-service:latest
+docker run --name dozu-embedding-service  --network dozu-app-network  -p 8686:8686 -d dozuu/dozu-embedding-service:latest
 ```
 
 ## Requirements

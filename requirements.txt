@@ -1,6 +1,8 @@
 fastapi
 uvicorn
 sentence-transformers
+torch
+transformers
 youtube-transcript-api
 PyPDF2
 requests  

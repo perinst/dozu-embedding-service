@@ -87,6 +87,11 @@ class SingleTextEmbeddingRequest(BaseModel):
     query: str
 
 
+class CompareEmbeddingRequest(BaseModel):
+    pattern: str
+    query: str
+
+
 class PDFEmbeddingRequest(BaseModel):
     fileUrl: str
 
@@ -248,8 +253,6 @@ def youtube_segments(req: YouTubeSegmentSentenceCalSimilarityRequest):
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    sentences = [YouTubeSentence(**s) for s in result["sentences"]]
-
     query_results = None
 
     if req.query:
@@ -277,6 +280,41 @@ def embedding_single(req: SingleTextEmbeddingRequest):
 
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/embedding/compare", response_model=Dict)
+def embedding_compare(req: CompareEmbeddingRequest):
+    """
+    Compare two texts by calculating cosine similarity between their embeddings.
+
+    Args:
+        req: Request containing pattern and query texts
+
+    Returns:
+        Dictionary with similarity score and both embedding vectors
+    """
+    ensure_model()
+
+    try:
+        query = req.query
+        pattern = req.pattern
+
+        query_embedding = _embed_single(query)
+        pattern_embedding = _embed_single(pattern)
+
+        similarity_score = float(np.dot(query_embedding, pattern_embedding))
+
+        return {
+            "similarity": similarity_score,
+            "queryEmbedding": query_embedding,
+            "patternEmbedding": pattern_embedding,
+        }
+
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Unexpected error in embedding comparison: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @app.post(
