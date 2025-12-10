@@ -34,7 +34,8 @@ COPY --from=builder /wheels /wheels
 RUN pip install --no-cache-dir /wheels/* \
     && rm -rf /wheels
 
-
+# Copy application code
+COPY src/ ./src/
 COPY *.py ./
 
 
@@ -53,4 +54,4 @@ EXPOSE 8686
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:8686/health')" || exit 1
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8686"]
+CMD ["uvicorn", "src.app.main:app", "--host", "0.0.0.0", "--port", "8686"]
