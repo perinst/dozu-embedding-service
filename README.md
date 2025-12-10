@@ -236,7 +236,6 @@ docker run --name dozu-embedding-service  --network dozu-app-network  -p 8686:86
 - `transformers` & `torch` - Model backend
 - `youtube-transcript-api` - YouTube transcript fetching
 - `pypdf` - PDF text extraction
-- `spacy` - Optional sentence refinement
 
 ## License
 
